@@ -1,8 +1,8 @@
 # Payment Reconciliation Engine
 
-Spring Boot + Spring Batch service untuk rekonsiliasi transaksi internal vs mutasi pihak ketiga (CSV).
+Spring Boot + Spring Batch service for reconciling internal transactions with third-party transaction mutations from CSV files.
 
-## Tech stack
+## Tech Stack
 
 - Java 25
 - Spring Boot 3.5.16
@@ -11,45 +11,47 @@ Spring Boot + Spring Batch service untuk rekonsiliasi transaksi internal vs muta
 - PostgreSQL
 - Maven
 
-## Fitur utama
+## Main Features
 
-- Reader CSV untuk mutasi pihak ketiga
-- Matching ke transaksi internal berdasarkan `referenceId`
-- Status hasil rekonsiliasi:
+- Read third-party transaction data from CSV files
+- Match transactions with internal transactions based on `referenceId`
+- Reconciliation result status:
   - `MATCHED`
   - `SUSPECT`
   - `UNMATCHED`
-- Simpan hasil ke tabel `reconciliation_results`
-- Trigger job manual via REST API
+- Save reconciliation results into `reconciliation_results` table
+- Trigger batch job manually using REST API
 
-## Struktur penting
+## Important Structure
 
 - App entry: [src/main/java/com/fintech/reconcile/PaymentReconciliationApplication.java](src/main/java/com/fintech/reconcile/PaymentReconciliationApplication.java)
 - Batch config: [src/main/java/com/fintech/reconcile/config/BatchConfig.java](src/main/java/com/fintech/reconcile/config/BatchConfig.java)
 - Processor: [src/main/java/com/fintech/reconcile/batch/processor/ReconciliationItemProcessor.java](src/main/java/com/fintech/reconcile/batch/processor/ReconciliationItemProcessor.java)
 - Trigger API: [src/main/java/com/fintech/reconcile/controller/ReconciliationTriggerController.java](src/main/java/com/fintech/reconcile/controller/ReconciliationTriggerController.java)
-- Config: [src/main/resources/application.yml](src/main/resources/application.yml)
+- Application config: [src/main/resources/application.yml](src/main/resources/application.yml)
 
 ## Prerequisites
 
 - JDK 25
-- PostgreSQL aktif
+- PostgreSQL is running
 - Maven 3.9+
 
-## Konfigurasi
+## Configuration
 
-Sesuaikan di [src/main/resources/application.yml](src/main/resources/application.yml):
+Configuration can be changed in [src/main/resources/application.yml](src/main/resources/application.yml).
 
-- `server.port` default `8481`
-- `spring.datasource.*`
-- `app.reconciliation.input-file-path` default `data/input/third_party_mutation.csv`
-- `app.reconciliation.chunk-size` default `500`
+Some important properties:
 
-Pastikan file input CSV tersedia di path yang dikonfigurasi.
+- `server.port`: default is `8481`
+- `spring.datasource.*`: database connection settings
+- `app.reconciliation.input-file-path`: default is `data/input/third_party_mutation.csv`
+- `app.reconciliation.chunk-size`: default is `500`
 
-## Format CSV input
+Make sure the input CSV file is available in the configured path before running the reconciliation job.
 
-Header yang dipakai reader:
+## Input CSV Format
+
+The CSV reader uses these headers:
 
 - `referenceId`
 - `accountNumber`
@@ -57,32 +59,34 @@ Header yang dipakai reader:
 - `transactionType`
 - `transactionTime`
 
-Contoh:
+Example:
 
 ```csv
 referenceId,accountNumber,amount,transactionType,transactionTime
 REF-001,1234567890,125000.00,DEBIT,2026-10-21T10:15:00
 ```
 
-## Menjalankan aplikasi
+## Running the Application
+
+Run the application using Maven:
 
 ```bash
 mvn clean spring-boot:run
 ```
 
-## Menjalankan batch job via API
+## Running Batch Job via API
 
-Endpoint:
+The batch job can be triggered manually using this endpoint:
 
 - `POST /api/reconciliation/run`
 
-Contoh:
+Example using curl:
 
 ```bash
 curl -X POST http://localhost:8481/api/reconciliation/run
 ```
 
-Contoh response:
+Example response:
 
 ```json
 {
@@ -92,14 +96,21 @@ Contoh response:
 }
 ```
 
-## Build dan test
+## Build and Test
+
+To compile the test code:
 
 ```bash
 mvn clean test-compile
+```
+
+To run the tests:
+
+```bash
 mvn clean test
 ```
 
-## Catatan
+## Notes
 
-- Saat ini [src/main/resources/application.yml](src/main/resources/application.yml) berisi kredensial database plain text. Ganti dengan environment variable untuk pemakaian tim/production.
-- `spring.batch.job.enabled=false` artinya job tidak auto-run saat startup, hanya jalan ketika dipicu API.
+- Currently, [src/main/resources/application.yml](src/main/resources/application.yml) contains database credentials in plain text. For team or production usage, it is better to move these credentials into environment variables.
+- `spring.batch.job.enabled=false` means the batch job will not run automatically when the application starts. The job only runs when triggered through the API.

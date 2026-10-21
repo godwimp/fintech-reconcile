@@ -1,0 +1,33 @@
+server:
+  port: 8481
+spring:
+  application:
+    name: payment-reconciliation-engine
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/reconciliation_db
+    username: postgres
+    password: shinjuku22
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  batch:
+    jdbc:
+      initialize-schema: always # Membuat tabel metadata BATCH_* otomatis saat pertama kali running
+    job:
+      enabled: false # Mencegah auto-run saat aplikasi start jika ingin dipicu via API / Cron
+
+app:
+  reconciliation:
+    input-file-path: "data/input/third_party_mutation.csv"
+    chunk-size: 500

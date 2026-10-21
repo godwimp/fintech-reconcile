@@ -22,3 +22,21 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+<<<<<<< HEAD
+=======
+
+# Maven build output
+target/
+
+# Maven wrapper artifacts
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+>>>>>>> c0a42d8 (feat: first commit)

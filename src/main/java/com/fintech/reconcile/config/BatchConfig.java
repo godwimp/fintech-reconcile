@@ -15,6 +15,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import com.fintech.reconcile.batch.listener.ReconciliationJobExecutionListener;
 import com.fintech.reconcile.batch.processor.ReconciliationItemProcessor;
 import com.fintech.reconcile.domain.dto.ThirdPartyMutationRecord;
 import com.fintech.reconcile.domain.entity.ReconciliationResult;
@@ -29,7 +30,7 @@ public class BatchConfig {
   private int chunkSize;
 
   // READER
-  @Bean 
+  @Bean
   public FlatFileItemReader<ThirdPartyMutationRecord> csvMutationReader() {
     return new FlatFileItemReaderBuilder<ThirdPartyMutationRecord>()
         .name("csvMutationReader")
@@ -37,21 +38,25 @@ public class BatchConfig {
         .delimited()
         .names("referenceId", "accountNumber", "amount", "transactionType", "transactionTime")
         .linesToSkip(1)
-        .fieldSetMapper(new BeanWrapperFieldSetMapper<>() {{
-          setTargetType(ThirdPartyMutationRecord.class);
-        }})
+        .fieldSetMapper(new BeanWrapperFieldSetMapper<>() {
+          {
+            setTargetType(ThirdPartyMutationRecord.class);
+          }
+        })
         .build();
   }
 
   // WRITER
-  @Bean 
+  @Bean
   public ItemWriter<ReconciliationResult> reconciliationResultWriter(ReconciliationResultRepository repository) {
     return repository::saveAll;
   }
 
   // COMBINING
-  @Bean 
-  public Step reconciliationStep(JobRepository jobRepository, PlatformTransactionManager transactionManager, FlatFileItemReader<ThirdPartyMutationRecord> reader, ReconciliationItemProcessor processor, ItemWriter<ReconciliationResult> writer) {
+  @Bean
+  public Step reconciliationStep(JobRepository jobRepository, PlatformTransactionManager transactionManager,
+      FlatFileItemReader<ThirdPartyMutationRecord> reader, ReconciliationItemProcessor processor,
+      ItemWriter<ReconciliationResult> writer) {
     return new StepBuilder("reconciliationStep", jobRepository)
         .<ThirdPartyMutationRecord, ReconciliationResult>chunk(chunkSize, transactionManager)
         .reader(reader)
@@ -64,10 +69,12 @@ public class BatchConfig {
   }
 
   // ENTRY POINT
-  @Bean 
-  public Job paymentReconciliationJob(JobRepository jobRepository, Step reconciliationStep) {
+  @Bean
+  public Job paymentReconciliationJob(JobRepository jobRepository, Step reconciliationStep,
+      ReconciliationJobExecutionListener auditListener) {
     return new JobBuilder("paymentReconciliationJob", jobRepository)
         .start(reconciliationStep)
+        .listener(auditListener)
         .build();
   }
 }

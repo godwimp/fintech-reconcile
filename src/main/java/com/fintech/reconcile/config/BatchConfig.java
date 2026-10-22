@@ -2,6 +2,7 @@ package com.fintech.reconcile.config;
 
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.Step;
+import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
@@ -23,7 +24,7 @@ import com.fintech.reconcile.repository.ReconciliationResultRepository;
 
 @Configuration
 public class BatchConfig {
-  @Value("${app.reconciliation.input-file-path}")
+  @Value("${app.reconciliation.incoming-dir:data/incoming}")
   private String inputFilePath;
 
   @Value("${app.reconciliation.chunk-size:500}")
@@ -31,10 +32,16 @@ public class BatchConfig {
 
   // READER
   @Bean
-  public FlatFileItemReader<ThirdPartyMutationRecord> csvMutationReader() {
+  @StepScope
+  public FlatFileItemReader<ThirdPartyMutationRecord> csvMutationReader(
+      @Value("#{jobParameters['filePath']}") String filePath) {
+    if (filePath == null) {
+      filePath = "data/incoming/mutation.csv";
+    }
+
     return new FlatFileItemReaderBuilder<ThirdPartyMutationRecord>()
         .name("csvMutationReader")
-        .resource(new FileSystemResource(inputFilePath))
+        .resource(new FileSystemResource(filePath))
         .delimited()
         .names("referenceId", "accountNumber", "amount", "transactionType", "transactionTime")
         .linesToSkip(1)

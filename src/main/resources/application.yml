@@ -17,17 +17,17 @@ spring:
     hibernate:
       ddl-auto: update
     show-sql: false
-    properties:
-      hibernate:
-        format_sql: true
 
   batch:
     jdbc:
-      initialize-schema: always # Membuat tabel metadata BATCH_* otomatis saat pertama kali running
+      initialize-schema: always 
     job:
-      enabled: false # Mencegah auto-run saat aplikasi start jika ingin dipicu via API / Cron
+      enabled: false 
 
-app:
+app: 
   reconciliation:
-    input-file-path: "data/input/third_party_mutation.csv"
+    incoming-dir: "data/incoming"
+    archive-dir: "data/archive"
     chunk-size: 500
+    cron: "0 */1 * * * ?" # Cron expression set on every 1 minute (for local testing purpose)
+    scheduler-enabled: true

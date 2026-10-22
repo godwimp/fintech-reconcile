@@ -1,5 +1,9 @@
 package com.fintech.reconcile.config;
 
+import java.sql.Timestamp;
+
+import javax.sql.DataSource;
+
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.Step;
 import org.springframework.batch.core.configuration.annotation.StepScope;
@@ -7,6 +11,8 @@ import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.batch.item.ItemWriter;
+import org.springframework.batch.item.database.JdbcBatchItemWriter;
+import org.springframework.batch.item.database.builder.JdbcBatchItemWriterBuilder;
 import org.springframework.batch.item.file.FlatFileItemReader;
 import org.springframework.batch.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.batch.item.file.mapping.BeanWrapperFieldSetMapper;
@@ -20,17 +26,13 @@ import com.fintech.reconcile.batch.listener.ReconciliationJobExecutionListener;
 import com.fintech.reconcile.batch.processor.ReconciliationItemProcessor;
 import com.fintech.reconcile.domain.dto.ThirdPartyMutationRecord;
 import com.fintech.reconcile.domain.entity.ReconciliationResult;
-import com.fintech.reconcile.repository.ReconciliationResultRepository;
 
 @Configuration
 public class BatchConfig {
-  @Value("${app.reconciliation.incoming-dir:data/incoming}")
-  private String inputFilePath;
-
   @Value("${app.reconciliation.chunk-size:500}")
   private int chunkSize;
 
-  // READER
+  // 1. Reader
   @Bean
   @StepScope
   public FlatFileItemReader<ThirdPartyMutationRecord> csvMutationReader(
@@ -43,7 +45,7 @@ public class BatchConfig {
         .name("csvMutationReader")
         .resource(new FileSystemResource(filePath))
         .delimited()
-        .names("referenceId", "accountNumber", "amount", "transactionType", "transactionTime")
+        .names("referenceId", "amount", "transactionType", "transactionTime")
         .linesToSkip(1)
         .fieldSetMapper(new BeanWrapperFieldSetMapper<>() {
           {
@@ -53,13 +55,30 @@ public class BatchConfig {
         .build();
   }
 
-  // WRITER
+  // 2. Writer using Native JDBC Batching
   @Bean
-  public ItemWriter<ReconciliationResult> reconciliationResultWriter(ReconciliationResultRepository repository) {
-    return repository::saveAll;
+  public JdbcBatchItemWriter<ReconciliationResult> reconciliationResultWriter(DataSource dataSource) {
+    String sql = """
+        INSERT INTO reconciliation_results (job_execution_id, reference_id, internal_amount, third_party_amount, amount_discrepancy, status, discrepancy_reason, reconciled_at) VALUES(?,?,?,?,?,?,?,?)
+        """;
+
+    return new JdbcBatchItemWriterBuilder<ReconciliationResult>()
+        .dataSource(dataSource)
+        .sql(sql)
+        .itemPreparedStatementSetter((item, ps) -> {
+          ps.setLong(1, item.getJobExecutionId());
+          ps.setString(2, item.getReferenceId());
+          ps.setBigDecimal(3, item.getInternalAmount());
+          ps.setBigDecimal(4, item.getThirdPartyAmount());
+          ps.setBigDecimal(5, item.getAmountDiscrepancy());
+          ps.setString(6, item.getStatus().name());
+          ps.setString(7, item.getDiscrepancyReason());
+          ps.setTimestamp(8, Timestamp.valueOf(item.getReconciledAt()));
+        })
+        .build();
   }
 
-  // COMBINING
+  // 3. Reader -> Processor -> Writer
   @Bean
   public Step reconciliationStep(JobRepository jobRepository, PlatformTransactionManager transactionManager,
       FlatFileItemReader<ThirdPartyMutationRecord> reader, ReconciliationItemProcessor processor,
@@ -75,13 +94,13 @@ public class BatchConfig {
         .build();
   }
 
-  // ENTRY POINT
+  // 4. Pipeline Entry Point
   @Bean
   public Job paymentReconciliationJob(JobRepository jobRepository, Step reconciliationStep,
       ReconciliationJobExecutionListener auditListener) {
     return new JobBuilder("paymentReconciliationJob", jobRepository)
-        .start(reconciliationStep)
         .listener(auditListener)
+        .start(reconciliationStep)
         .build();
   }
 }

@@ -56,4 +56,8 @@ public class FileLifecycleService {
       log.error("Failed to archive file: {}", file.getAbsolutePath());
     }
   }
+
+  public String getIncomingPath() {
+    return Paths.get(incomingDir).toAbsolutePath().normalize().toString();
+  }
 }

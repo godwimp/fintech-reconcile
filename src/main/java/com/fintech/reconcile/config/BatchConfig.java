@@ -1,9 +1,11 @@
 package com.fintech.reconcile.config;
 
-import java.sql.Timestamp;
-
-import javax.sql.DataSource;
-
+import com.fintech.reconcile.batch.listener.ReconciliationJobExecutionListener;
+import com.fintech.reconcile.batch.listener.ReconciliationSkipListener;
+import com.fintech.reconcile.batch.processor.ReconciliationItemProcessor;
+import com.fintech.reconcile.domain.dto.ThirdPartyMutationRecord;
+import com.fintech.reconcile.domain.entity.ReconciliationResult;
+import com.fintech.reconcile.service.FileLifecycleService;
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.Step;
 import org.springframework.batch.core.configuration.annotation.StepScope;
@@ -22,14 +24,13 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.transaction.PlatformTransactionManager;
 
-import com.fintech.reconcile.batch.listener.ReconciliationJobExecutionListener;
-import com.fintech.reconcile.batch.listener.ReconciliationSkipListener;
-import com.fintech.reconcile.batch.processor.ReconciliationItemProcessor;
-import com.fintech.reconcile.domain.dto.ThirdPartyMutationRecord;
-import com.fintech.reconcile.domain.entity.ReconciliationResult;
+import javax.sql.DataSource;
+import java.io.File;
+import java.sql.Timestamp;
 
 @Configuration
 public class BatchConfig {
+
   @Value("${app.reconciliation.chunk-size:500}")
   private int chunkSize;
 
@@ -37,17 +38,26 @@ public class BatchConfig {
   @Bean
   @StepScope
   public FlatFileItemReader<ThirdPartyMutationRecord> csvMutationReader(
-      @Value("#{jobParameters['filePath']}") String filePath) {
-    if (filePath == null) {
-      filePath = "data/incoming/mutation.csv";
+      @Value("#{jobParameters['filePath']}") String filePath,
+      FileLifecycleService fileLifecycleService) {
+
+    File targetFile;
+
+    if (filePath != null && !filePath.isBlank()) {
+      targetFile = new File(filePath);
+    } else {
+      targetFile = fileLifecycleService.getNextAvailableFile()
+          .orElseThrow(() -> new IllegalStateException(
+              "[BATCH] Tidak ada file .csv apa pun di direktori incoming: "
+                  + fileLifecycleService.getIncomingPath()));
     }
 
     return new FlatFileItemReaderBuilder<ThirdPartyMutationRecord>()
         .name("csvMutationReader")
-        .resource(new FileSystemResource(filePath))
+        .resource(new FileSystemResource(targetFile))
         .delimited()
-        .names("referenceId", "amount", "transactionType", "transactionTime")
-        .linesToSkip(1)
+        .names("referenceId", "accountNumber", "amount", "transactionType", "transactionTime")
+        .linesToSkip(1) // Lewati header CSV
         .fieldSetMapper(new BeanWrapperFieldSetMapper<>() {
           {
             setTargetType(ThirdPartyMutationRecord.class);
@@ -56,11 +66,13 @@ public class BatchConfig {
         .build();
   }
 
-  // 2. Writer using Native JDBC Batching
+  // 2. WRITER: Native JDBC Batching
   @Bean
   public JdbcBatchItemWriter<ReconciliationResult> reconciliationResultWriter(DataSource dataSource) {
     String sql = """
-        INSERT INTO reconciliation_results (job_execution_id, reference_id, internal_amount, third_party_amount, amount_discrepancy, status, discrepancy_reason, reconciled_at) VALUES(?,?,?,?,?,?,?,?)
+            INSERT INTO reconciliation_results
+            (job_execution_id, reference_id, internal_amount, third_party_amount, amount_discrepancy, status, discrepancy_reason, reconciled_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """;
 
     return new JdbcBatchItemWriterBuilder<ReconciliationResult>()
@@ -79,30 +91,34 @@ public class BatchConfig {
         .build();
   }
 
-  // 3. Reader -> Processor -> Writer
+  // 3. STEP: Reader -> Processor -> Writer + Fault Tolerance
   @Bean
-  public Step reconciliationStep(JobRepository jobRepository, PlatformTransactionManager transactionManager,
-      FlatFileItemReader<ThirdPartyMutationRecord> reader, ReconciliationItemProcessor processor,
-      ItemWriter<ReconciliationResult> writer, ReconciliationSkipListener skipListener) {
+  public Step reconciliationStep(JobRepository jobRepository,
+      PlatformTransactionManager transactionManager,
+      FlatFileItemReader<ThirdPartyMutationRecord> reader,
+      ReconciliationItemProcessor processor,
+      ItemWriter<ReconciliationResult> writer,
+      ReconciliationSkipListener skipListener) {
     return new StepBuilder("reconciliationStep", jobRepository)
         .<ThirdPartyMutationRecord, ReconciliationResult>chunk(chunkSize, transactionManager)
         .reader(reader)
         .processor(processor)
         .writer(writer)
         .faultTolerant()
-        .skipLimit(25)
         .skip(Exception.class)
+        .skipLimit(25)
         .listener(skipListener)
         .build();
   }
 
-  // 4. Pipeline Entry Point
+  // 4. JOB: Pipeline Entry Point
   @Bean
-  public Job paymentReconciliationJob(JobRepository jobRepository, Step reconciliationStep,
+  public Job paymentReconciliationJob(JobRepository jobRepository,
+      Step reconciliationStep,
       ReconciliationJobExecutionListener auditListener) {
     return new JobBuilder("paymentReconciliationJob", jobRepository)
-        .listener(auditListener)
         .start(reconciliationStep)
+        .listener(auditListener)
         .build();
   }
 }

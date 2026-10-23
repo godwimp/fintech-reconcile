@@ -40,3 +40,5 @@ target/
 .DS_Store
 Thumbs.db
 >>>>>>> c0a42d8 (feat: first commit)
+
+data/**

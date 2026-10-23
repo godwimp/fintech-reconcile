@@ -23,6 +23,7 @@ import org.springframework.core.io.FileSystemResource;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import com.fintech.reconcile.batch.listener.ReconciliationJobExecutionListener;
+import com.fintech.reconcile.batch.listener.ReconciliationSkipListener;
 import com.fintech.reconcile.batch.processor.ReconciliationItemProcessor;
 import com.fintech.reconcile.domain.dto.ThirdPartyMutationRecord;
 import com.fintech.reconcile.domain.entity.ReconciliationResult;
@@ -82,15 +83,16 @@ public class BatchConfig {
   @Bean
   public Step reconciliationStep(JobRepository jobRepository, PlatformTransactionManager transactionManager,
       FlatFileItemReader<ThirdPartyMutationRecord> reader, ReconciliationItemProcessor processor,
-      ItemWriter<ReconciliationResult> writer) {
+      ItemWriter<ReconciliationResult> writer, ReconciliationSkipListener skipListener) {
     return new StepBuilder("reconciliationStep", jobRepository)
         .<ThirdPartyMutationRecord, ReconciliationResult>chunk(chunkSize, transactionManager)
         .reader(reader)
         .processor(processor)
         .writer(writer)
         .faultTolerant()
+        .skipLimit(25)
         .skip(Exception.class)
-        .skipLimit(10)
+        .listener(skipListener)
         .build();
   }
 

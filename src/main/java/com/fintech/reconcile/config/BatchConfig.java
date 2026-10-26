@@ -18,10 +18,14 @@ import org.springframework.batch.item.database.builder.JdbcBatchItemWriterBuilde
 import org.springframework.batch.item.file.FlatFileItemReader;
 import org.springframework.batch.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.batch.item.file.mapping.BeanWrapperFieldSetMapper;
+import org.springframework.batch.item.support.SynchronizedItemStreamReader;
+import org.springframework.batch.item.support.builder.SynchronizedItemStreamReaderBuilder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.task.TaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
@@ -34,30 +38,29 @@ public class BatchConfig {
   @Value("${app.reconciliation.chunk-size:500}")
   private int chunkSize;
 
-  // 1. Reader
+  @Value("${app.reconciliation.thread-pool-size:4}")
+  private int threadPoolSize;
+
+  // 1. Thread Pool Task Executor
   @Bean
-  @StepScope
-  public FlatFileItemReader<ThirdPartyMutationRecord> csvMutationReader(
-      @Value("#{jobParameters['filePath']}") String filePath,
-      FileLifecycleService fileLifecycleService) {
+  public TaskExecutor reconciliationTaskExecutor() {
+    ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+    executor.setCorePoolSize(threadPoolSize);
+    executor.setMaxPoolSize(threadPoolSize * 2);
+    executor.setQueueCapacity(100);
+    executor.setThreadNamePrefix("recon-worker-");
+    executor.initialize();
+    return executor;
+  }
 
-    File targetFile;
-
-    if (filePath != null && !filePath.isBlank()) {
-      targetFile = new File(filePath);
-    } else {
-      targetFile = fileLifecycleService.getNextAvailableFile()
-          .orElseThrow(() -> new IllegalStateException(
-              "[BATCH] Tidak ada file .csv apa pun di direktori incoming: "
-                  + fileLifecycleService.getIncomingPath()));
-    }
-
+  // 2. READER: Unsynchronized FlatFileItemReader
+  public FlatFileItemReader<ThirdPartyMutationRecord> rawCsvMutationReader(File targetFile) {
     return new FlatFileItemReaderBuilder<ThirdPartyMutationRecord>()
-        .name("csvMutationReader")
+        .name("rawCsvMutationReader")
         .resource(new FileSystemResource(targetFile))
         .delimited()
         .names("referenceId", "accountNumber", "amount", "transactionType", "transactionTime")
-        .linesToSkip(1) // Lewati header CSV
+        .linesToSkip(1)
         .fieldSetMapper(new BeanWrapperFieldSetMapper<>() {
           {
             setTargetType(ThirdPartyMutationRecord.class);
@@ -66,7 +69,27 @@ public class BatchConfig {
         .build();
   }
 
-  // 2. WRITER: Native JDBC Batching
+  // 3. Sync Reader
+  @Bean
+  @StepScope
+  public SynchronizedItemStreamReader<ThirdPartyMutationRecord> csvMutationReader(
+      @Value("#{jobParameters['filePath']}") String filePath,
+      FileLifecycleService fileLifecycleService) {
+    File targetFile;
+    if (filePath != null && !filePath.isBlank()) {
+      targetFile = new File(filePath);
+    } else {
+      targetFile = fileLifecycleService.getNextAvailableFile()
+          .orElseThrow(() -> new IllegalStateException(
+              "[BATCH] Tidak ada file .csv di direktori incoming: " + fileLifecycleService.getIncomingPath()));
+    }
+    FlatFileItemReader<ThirdPartyMutationRecord> delegate = rawCsvMutationReader(targetFile);
+    return new SynchronizedItemStreamReaderBuilder<ThirdPartyMutationRecord>()
+        .delegate(delegate)
+        .build();
+  }
+
+  // 4. WRITER
   @Bean
   public JdbcBatchItemWriter<ReconciliationResult> reconciliationResultWriter(DataSource dataSource) {
     String sql = """
@@ -91,14 +114,15 @@ public class BatchConfig {
         .build();
   }
 
-  // 3. STEP: Reader -> Processor -> Writer + Fault Tolerance
+  // 5. Multi-threaded Step
   @Bean
   public Step reconciliationStep(JobRepository jobRepository,
       PlatformTransactionManager transactionManager,
-      FlatFileItemReader<ThirdPartyMutationRecord> reader,
+      SynchronizedItemStreamReader<ThirdPartyMutationRecord> reader,
       ReconciliationItemProcessor processor,
       ItemWriter<ReconciliationResult> writer,
-      ReconciliationSkipListener skipListener) {
+      ReconciliationSkipListener skipListener,
+      TaskExecutor reconciliationTaskExecutor) {
     return new StepBuilder("reconciliationStep", jobRepository)
         .<ThirdPartyMutationRecord, ReconciliationResult>chunk(chunkSize, transactionManager)
         .reader(reader)
@@ -108,13 +132,14 @@ public class BatchConfig {
         .skip(Exception.class)
         .skipLimit(25)
         .listener(skipListener)
+        .taskExecutor(reconciliationTaskExecutor)
+        .throttleLimit(threadPoolSize)
         .build();
   }
 
-  // 4. JOB: Pipeline Entry Point
+  // 6. Job
   @Bean
-  public Job paymentReconciliationJob(JobRepository jobRepository,
-      Step reconciliationStep,
+  public Job paymentReconciliationJob(JobRepository jobRepository, Step reconciliationStep,
       ReconciliationJobExecutionListener auditListener) {
     return new JobBuilder("paymentReconciliationJob", jobRepository)
         .start(reconciliationStep)

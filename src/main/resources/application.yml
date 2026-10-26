@@ -10,7 +10,7 @@ spring:
     password: shinjuku22
     driver-class-name: org.postgresql.Driver
     hikari:
-      maximum-pool-size: 10
+      maximum-pool-size: 15
       minimum-idle: 5
 
   jpa:
@@ -29,5 +29,6 @@ app:
     incoming-dir: "data/incoming"
     archive-dir: "data/archive"
     chunk-size: 500
+    thread-pool-size: 4
     cron: "0 */1 * * * ?" # Cron expression set on every 1 minute (for local testing purpose)
     scheduler-enabled: true
